@@ -10,6 +10,7 @@ function check_install_package {
 	fi
 }
 
+
 function append_to_bashrc() {
 	local text="$1"
 	local bashrc="${HOME}/.bashrc"
@@ -62,5 +63,29 @@ function check_for_local_download {
 		echo "No local copy found. Downloading from ${file_url}..." >&2
 		wget -q "${file_url}" -P "${tmp_dir}" || die_with_message "Failure downloading ${file_url}! Exiting."
 		echo ${tmp_dir}/${file_name}
+	fi
+}
+
+
+function clone_git_repo {
+	local repo_url="${1}"
+	if [ -z "${repo_url}" ]; then
+		echo "No URL passed to clone_git_repo()! Exiting." >&2
+		exit 1
+	fi
+
+	local repo_name="${repo_url##*/}"
+	local download_dir="${HOME}/Downloads"
+	local local_downloaded_copy="${download_dir}/${repo_name}"
+
+	# check if we have a local downloaded copy already
+	if [ -d ${local_downloaded_copy} ]; then
+		echo "Using local copy found at ${local_downloaded_copy}." >&2
+		echo ${local_downloaded_copy}
+	else
+		local tmp_dir="$(mktemp -d)"
+		echo "No local copy found. Cloning from ${repo_url}..." >&2
+		git clone "${repo_url}" "${tmp_dir}/${repo_name}" || die_with_message "Failure cloning ${repo_url}! Exiting."
+		echo ${tmp_dir}/${repo_name}
 	fi
 }

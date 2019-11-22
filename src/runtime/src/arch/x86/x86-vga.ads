@@ -9,8 +9,6 @@
 --     Anthony <ajxs [at] panoptic.online>
 -------------------------------------------------------------------------------
 
-with System.Storage_Elements;
-
 -------------------------------------------------------------------------------
 --  X86.VGA
 --
@@ -21,8 +19,6 @@ with System.Storage_Elements;
 -------------------------------------------------------------------------------
 package x86.Vga is
    pragma Preelaborate (x86.Vga);
-
-   use System.Storage_Elements;
 
    ----------------------------------------------------------------------------
    --  The predefined VGA color codes.
@@ -146,7 +142,7 @@ private
    Vga_Output_Buffer : Vga_Buffer (0 .. (VGA_COL_COUNT * VGA_ROW_COUNT) - 1)
    with Import,
      Convention => Ada,
-     Address    => To_Address (16#C03F_E000#),
+     Address    => System'To_Address (16#C03F_E000#),
      Volatile;
 
 end x86.Vga;

@@ -2,23 +2,28 @@
 
 source "_shared.sh" || exit 1
 
-# Recipe for building and installing a GNAT capable GCC cross-compiler from `x86-64-linux-elf`
-# to `i686-elf` from source.
-# This script assumes a Debian-like system. Ubuntu etc. But can easily be adapted to another
-# system. If you want help with this, feel free to contact me directly.
-# Requires a compatible version of GNAT on the host machine for bootstrapping the
-# installation process. This is the source of much trouble and confusion. I have only been
-# able to build with certain combinations. Usually a matching system version of FSF GNAT
-# is required. e.g System FSF GNAT 8.3.0 will need to be installed to build GCC/GNAT 8.3.0.
+# Recipe for building and installing a GNAT capable GCC cross-compiler from
+# `x86-64-linux-elf` to `i686-elf` from source.
 #
-# Note: Assumes that the source files for GCC, newlib, binutils, and optionally GMP, MPC, MPFR
-# are stored under the directory pointed at by the `source_dir` variable below.
-# The 'build' directory used for building these is configurable below.
-# Optionally the script checks for GMP, MPC and MPFR being installed on the system and links
-# against them staticly during the build process.
+# This script assumes a Debian-like system. Ubuntu etc. But can easily be
+# adapted to another system. If you want help with this, feel free to contact
+# me directly.
 #
-# Once the installation is finished, you will need to add the directory specified in the
-# `${BUILD_PREFIX}` variable to your PATH to use the built compiler.
+# Requires a compatible version of GNAT on the host machine for bootstrapping
+# the installation process. This is the source of much trouble and confusion. I
+# have only been able to build with certain combinations. Usually a matching
+# system version of FSF GNAT is required. e.g System FSF GNAT 8.3.0 will need
+# to be installed to build GCC/GNAT 8.3.0.
+#
+# Note: Assumes that the source files for GCC, newlib, binutils, and optionally
+# GMP, MPC, MPFR are stored under the directory pointed at by the `source_dir`
+# variable below. The 'build' directory used for building these is configurable
+# below. Optionally the script checks for GMP, MPC and MPFR being installed on
+# the system and links against them statically during the build process.
+#
+# Once the installation is finished, you will need to add the directory
+# specified in the `${BUILD_PREFIX}` variable to your PATH to use the built
+# compiler.
 
 
 # The target triplet for the build.
@@ -38,9 +43,19 @@ use_local_deps=1
 # The search dir when looking for these local dependency libraries.
 local_lib_dir="/usr/local"
 
+# Whether we want to use the local installation of gprbuild when compiling with
+# the new cross compiler. This is handy in the event that it is undesirable to
+# modify the `compilers.xml` configuration for the local installation. To build
+# gprbuild, xmlada needs to be installed, so we'll be building and installing
+# a bootstrap version of xmlada for good measure.
+use_local_gprbuild=0
+
 
 # The concurrency to use during the build process.
 concurrency=8
+
+# The major version of the locally installed GCC and GNAT binaries
+local_gcc_major_version="8"
 
 # The directory where the source dirs are located.
 source_dir="${HOME}/src"
@@ -54,11 +69,29 @@ newlib_version="3.1.0"
 gmp_version="6.1.2"
 mpc_version="1.1.0"
 mpfr_version="4.0.2"
+xmlada_version="19.2"
+gprbuild_version="19.2"
+
+# For a GNU mirror close to you, find a base URL from this page:
+# https://www.gnu.org/prep/ftp.html
+gnu_mirror="https://mirrors.kernel.org/gnu/"
+
+# This URL is for downloading newlib.
+sourceware_url="https://sourceware.org/pub/"
+
+cc_binary="/usr/bin/gcc-${local_gcc_major_version}"
+cxx_binary="/usr/bin/g++-${local_gcc_major_version}"
 
 
 # Builds and installs binutils.
 function build_binutils {
 	binutils_dir="binutils-${binutils_version}"
+	binutils_tar="$(check_for_local_download ${gnu_mirror}/binutils/binutils-${binutils_version}.tar.xz)"
+
+	if [[ ! -d "${source_dir}/${binutils_dir}" ]]; then
+		cd "${source_dir}" || exit 1
+		tar xf "${binutils_tar}" || die_with_message "Error extracting binutils archive! Exiting."
+	fi
 
 	cd "${build_dir}" || exit 1
 
@@ -74,21 +107,23 @@ function build_binutils {
 
 	cd "${build_dir}/${binutils_dir}" || exit 1
 
-	${source_dir}/${binutils_dir}/configure    \
-		--target=${BUILD_TARGET}                 \
-		--prefix="${BUILD_PREFIX}"               \
-		--host="${HOST}"                         \
-		--with-gcc                               \
-		--with-sysroot                           \
-		--disable-nls                            \
-		--enable-multilib                        \
-		--enable-interwork                       \
-		--disable-shared                         \
-		--disable-threads                        \
+	CC="${cc_binary}"                       \
+	CXX="${cxx_binary}"                     \
+	${source_dir}/${binutils_dir}/configure \
+		--target=${BUILD_TARGET}            \
+		--prefix="${BUILD_PREFIX}"          \
+		--host="${HOST}"                    \
+		--with-gcc                          \
+		--with-sysroot                      \
+		--disable-nls                       \
+		--enable-multilib                   \
+		--enable-interwork                  \
+		--disable-shared                    \
+		--disable-threads                   \
 		--disable-werror || exit 1
 
 	make -j${concurrency} || die_with_message "Error building binutils"
-	make -j${concurrency}  install || die_with_message "Error installing binutils"
+	make install || die_with_message "Error installing binutils"
 }
 
 
@@ -97,6 +132,12 @@ function build_binutils {
 # which includes GNAT.
 function build_bootstrap_gcc {
 	gcc_dir="gcc-${gcc_version}"
+	gcc_tar="$(check_for_local_download ${gnu_mirror}/gcc/gcc-${gcc_version}/gcc-${gcc_version}.tar.xz)"
+
+	if [[ ! -d "${source_dir}/${gcc_dir}" ]]; then
+		cd "${source_dir}" || exit 1
+		tar xf "${gcc_tar}" || die_with_message "Error extracting gcc archive! Exiting."
+	fi
 
 	cd "${build_dir}" || exit 1
 
@@ -112,22 +153,24 @@ function build_bootstrap_gcc {
 
 	cd "${build_dir}/${gcc_dir}" || exit 1
 
-	${source_dir}/${gcc_dir}/configure    \
-		--target=${BUILD_TARGET}            \
-		--prefix="${BUILD_PREFIX}"          \
-		--enable-languages="c"              \
-		--with-newlib                       \
-		--with-gmp=${local_lib_dir}         \
-		--with-mpc=${local_lib_dir}         \
-		--with-mpfr=${local_lib_dir}        \
-		--without-headers                   \
-		--enable-multilib                   \
-		--disable-shared                    \
-		--with-system-zlib                  \
+	CC="${cc_binary}"                  \
+	CXX="${cxx_binary}"                \
+	${source_dir}/${gcc_dir}/configure \
+		--target=${BUILD_TARGET}       \
+		--prefix="${BUILD_PREFIX}"     \
+		--enable-languages="c"         \
+		--with-newlib                  \
+		--with-gmp=${local_lib_dir}    \
+		--with-mpc=${local_lib_dir}    \
+		--with-mpfr=${local_lib_dir}   \
+		--without-headers              \
+		--enable-multilib              \
+		--disable-shared               \
+		--with-system-zlib             \
 		--disable-nls || exit 1
 
 	make -j${concurrency} all-gcc || die_with_message "Error building initial GCC"
-	make -j${concurrency} install-gcc || die_with_message "Error installing initial GCC"
+	make install-gcc || die_with_message "Error installing initial GCC"
 }
 
 
@@ -149,32 +192,34 @@ function build_gcc {
 
 	cd "${build_dir}/${gcc_dir}" || exit 1
 
-	${source_dir}/${gcc_dir}/configure    \
-		--target=${BUILD_TARGET}            \
-		--prefix="${BUILD_PREFIX}"          \
-		--enable-languages="c,c++,ada"      \
-		--with-newlib                       \
-		--with-gmp=${local_lib_dir}         \
-		--with-mpc=${local_lib_dir}         \
-		--with-mpfr=${local_lib_dir}        \
-		--disable-libada                    \
-		--without-headers                   \
-		--disable-threads                   \
-		--enable-multilib                   \
-		--enable-interwork                  \
-		--disable-shared                    \
-		--with-system-zlib                  \
-		--without-libiconv-prefix           \
-		--disable-libmudflap                \
-		--disable-libstdcxx-pch             \
-		--enable-lto                        \
-		--with-system-zlib                  \
+	CC="${cc_binary}"                  \
+	CXX="${cxx_binary}"                \
+	${source_dir}/${gcc_dir}/configure \
+		--target=${BUILD_TARGET}       \
+		--prefix="${BUILD_PREFIX}"     \
+		--enable-languages="c,c++,ada" \
+		--with-newlib                  \
+		--with-gmp=${local_lib_dir}    \
+		--with-mpc=${local_lib_dir}    \
+		--with-mpfr=${local_lib_dir}   \
+		--disable-libada               \
+		--without-headers              \
+		--disable-threads              \
+		--enable-multilib              \
+		--enable-interwork             \
+		--disable-shared               \
+		--with-system-zlib             \
+		--without-libiconv-prefix      \
+		--disable-libmudflap           \
+		--disable-libstdcxx-pch        \
+		--enable-lto                   \
+		--with-system-zlib             \
 		--disable-nls || exit 1
 
 	make -j${concurrency} all-gcc || die_with_message "Error building GCC"
 	make -j${concurrency} all-target-libgcc || die_with_message "Error building GCC"
 	make -j${concurrency} -C gcc cross-gnattools ada.all.cross || die_with_message "Error building GCC"
-	make -j${concurrency} install-strip-gcc install-target-libgcc || die_with_message "Error installing GCC"
+	make install-strip-gcc install-target-libgcc || die_with_message "Error installing GCC"
 }
 
 
@@ -196,13 +241,13 @@ function build_gmp {
 
 	cd "${build_dir}/${gmp_dir}" || exit 1
 
-	${source_dir}/${gmp_dir}/configure    \
-		--host=${HOST}                      \
-		--build=${BUILD_TARGET}             \
+	${source_dir}/${gmp_dir}/configure \
+		--host=${HOST}                 \
+		--build=${BUILD_TARGET}        \
 		--prefix="${BUILD_PREFIX}" || exit 1
 
 	make -j${concurrency} || die_with_message "Error building gmp"
-	make -j${concurrency}  install || die_with_message "Error installing gmp"
+	make install || die_with_message "Error installing gmp"
 }
 
 
@@ -224,12 +269,12 @@ function build_mpc {
 
 	cd "${build_dir}/${mpc_dir}" || exit 1
 
-	${source_dir}/${mpc_dir}/configure    \
-		--target=${BUILD_TARGET}            \
+	${source_dir}/${mpc_dir}/configure \
+		--target=${BUILD_TARGET}       \
 		--prefix="${BUILD_PREFIX}" || exit 1
 
 	make -j${concurrency} || die_with_message "Error building mpc"
-	make -j${concurrency}  install || die_with_message "Error installing mpc"
+	make install || die_with_message "Error installing mpc"
 }
 
 
@@ -251,18 +296,24 @@ function build_mpfr {
 
 	cd "${build_dir}/${mpfr_dir}" || exit 1
 
-	${source_dir}/${mpfr_dir}/configure    \
-		--target=${BUILD_TARGET}             \
+	${source_dir}/${mpfr_dir}/configure \
+		--target=${BUILD_TARGET}        \
 		--prefix="${BUILD_PREFIX}" || exit 1
 
 	make -j${concurrency} || die_with_message "Error building mpfr"
-	make -j${concurrency}  install || die_with_message "Error installing mpfr"
+	make install || die_with_message "Error installing mpfr"
 }
 
 
 # Builds and installs newlib.
 function build_newlib {
 	newlib_dir="newlib-${newlib_version}"
+	newlib_tar="$(check_for_local_download ${sourceware_url}/newlib/newlib-${newlib_version}.tar.gz)"
+
+	if [[ ! -d "${source_dir}/${newlib_dir}" ]]; then
+		cd "${source_dir}" || exit 1
+		tar xf "${newlib_tar}" || die_with_message "Error extracting newlib archive! Exiting."
+	fi
 
 	cd "${build_dir}" || exit 1
 
@@ -278,14 +329,154 @@ function build_newlib {
 
 	cd "${build_dir}/${newlib_dir}" || exit 1
 
+	CC="${cc_binary}"                     \
+	CXX="${cxx_binary}"                   \
 	${source_dir}/${newlib_dir}/configure \
-		--target=${BUILD_TARGET} \
-		--prefix="${BUILD_PREFIX}" \
-		--disable-multilib \
+		--target=${BUILD_TARGET}          \
+		--prefix="${BUILD_PREFIX}"        \
+		--disable-multilib                \
 		--disable-nls || exit 1
 
 	make -j${concurrency} all || die_with_message "Error building newlib"
-	make -j${concurrency} install || die_with_message "Error installing newlib"
+	make install || die_with_message "Error installing newlib"
+}
+
+
+function download_xmlada {
+	xmlada_source_dir="$(clone_git_repo https://github.com/AdaCore/xmlada.git)"
+
+	cd "${xmlada_source_dir}" || exit 1
+	git checkout master >&2 || exit 1
+	git fetch origin "${xmlada_version}:${xmlada_version}" >&2 || exit 1
+	git checkout "${xmlada_version}" >&2 || exit 1
+
+	echo "${xmlada_source_dir}"
+}
+
+function download_gprbuild {
+	gprbuild_source_dir="$(clone_git_repo https://github.com/AdaCore/gprbuild.git)"
+
+	cd "${gprbuild_source_dir}" || exit 1
+	git checkout master >&2 || exit 1
+	git fetch origin "${gprbuild_version}:${gprbuild_version}" >&2 || exit 1
+	git checkout "${gprbuild_version}" >&2 || exit 1
+
+	echo "${gprbuild_source_dir}"
+}
+
+# Builds and installs the xmlada
+function build_xmlada {
+	xmlada_dir="xmlada-${xmlada_version}"
+	xmlada_source_dir="${1}"
+	original_path="${PATH}"
+	target="$(/usr/bin/gcc-${local_gcc_major_version} -dumpmachine)"
+
+	if [[ -f "${BUILD_PREFIX}/xmlada-bootstrap/share/gpr/xmlada.gpr" ]]; then
+		echo "xmlada already built"
+		return 0
+	fi
+
+	cd "${xmlada_source_dir}" || exit 1
+
+	echo "Building xmlada for arch: '${target}'"
+	echo "Target: ${target}"
+	echo "Prefix: ${BUILD_PREFIX}/xmlada-bootstrap"
+	echo "Source dir: ${xmlada_source_dir}"
+	prompt_to_confirm
+
+	# We would have passed a source directory option to this configure script,
+	# but the xmlada Makefile template (Makefile.in) does not support it...
+	# Because of this, we'll build it in-place.
+	CC="${cc_binary}"                                              \
+	CXX="${cxx_binary}"                                            \
+	PATH="${BUILD_PREFIX}/gprbuild-bootstrap/bin:${original_path}" \
+	${xmlada_source_dir}/configure                                 \
+		--prefix="${BUILD_PREFIX}/xmlada-bootstrap" || exit 1
+
+	CC="${cc_binary}"                                              \
+	CXX="${cxx_binary}"                                            \
+	PATH="${BUILD_PREFIX}/gprbuild-bootstrap/bin:${original_path}" \
+	make -j${concurrency} all || die_with_message "Error building xmlada"
+
+	CC="${cc_binary}"                                              \
+	CXX="${cxx_binary}"                                            \
+	PATH="${BUILD_PREFIX}/gprbuild-bootstrap/bin:${original_path}" \
+	make install || die_with_message "Error installing xmlada"
+}
+
+# Builds and installs the bootstrap version of gprbuild
+function build_bootstrap_gprbuild {
+	gprbuild_bootstrap_dir="gprbuild-bootstrap-${gprbuild_version}"
+	gprbuild_source_dir="${1}"
+	xmlada_source_dir="${2}"
+	target="$(/usr/bin/gcc-${local_gcc_major_version} -dumpmachine)"
+
+	if [[ -x "${BUILD_PREFIX}/gprbuild-bootstrap/bin/gprbuild" ]]; then
+		echo "gprbuild-bootstrap already built"
+		return 0
+	fi
+
+	cd "${build_dir}" || exit 1
+
+	echo "Building gprbuild bootstrap for arch: '${target}'"
+	echo "Target: ${target}"
+	echo "Prefix: ${BUILD_PREFIX}/gprbuild-bootstrap"
+	echo "Source dir: ${gprbuild_source_dir}"
+	prompt_to_confirm
+
+	if [[ ! -d "${build_dir}/${gprbuild_bootstrap_dir}" ]]; then
+		mkdir "${build_dir}/${gprbuild_bootstrap_dir}" || die_with_message "Error creating build dir! Exiting"
+	fi
+
+	cd "${build_dir}/${gprbuild_bootstrap_dir}" || exit 1
+
+	CC="${cc_binary}"                                 \
+	CXX="${cxx_binary}"                               \
+	${gprbuild_source_dir}/bootstrap.sh               \
+		--with-xmlada="${xmlada_source_dir}"          \
+		--prefix="${BUILD_PREFIX}/gprbuild-bootstrap" \
+		--srcdir="${gprbuild_source_dir}" || die_with_message "Error building/installing gprbuild-bootstrap"
+}
+
+# Builds and installs gprbuild
+function build_gprbuild {
+	gprbuild_dir="gprbuild-${gprbuild_version}"
+	gprbuild_source_dir="${1}"
+	original_path="${PATH}"
+	target="$(/usr/bin/gcc-${local_gcc_major_version} -dumpmachine)"
+
+	if [[ -x "${BUILD_PREFIX}/gprbuild" ]]; then
+		echo "gprbuild already built"
+		return 0
+	fi
+
+	cd "${gprbuild_source_dir}" || exit 1
+
+	echo "Building gprbuild for arch: '${target}'"
+	echo "Target: ${target}"
+	echo "Prefix: ${BUILD_PREFIX}"
+	echo "Source dir: ${gprbuild_source_dir}"
+	prompt_to_confirm
+
+	# We would have passed a source directory option to this setup script,
+	# but the gprbuild project file does not seem to support it...
+	# Because of this, we'll build it in-place.
+	CC="${cc_binary}"                                              \
+	CXX="${cxx_binary}"                                            \
+	PATH="${BUILD_PREFIX}/gprbuild-bootstrap/bin:${original_path}" \
+	make prefix="${BUILD_PREFIX}" setup || exit 1
+
+	CC="${cc_binary}"                                              \
+	CXX="${cxx_binary}"                                            \
+	PATH="${BUILD_PREFIX}/gprbuild-bootstrap/bin:${original_path}" \
+	GPR_PROJECT_PATH="${BUILD_PREFIX}/xmlada-bootstrap/share/gpr"  \
+	make -j${concurrency} all || die_with_message "Error building gprbuild"
+
+	CC="${cc_binary}"                                              \
+	CXX="${cxx_binary}"                                            \
+	PATH="${BUILD_PREFIX}/gprbuild-bootstrap/bin:${original_path}" \
+	GPR_PROJECT_PATH="${BUILD_PREFIX}/xmlada-bootstrap/share/gpr"  \
+	make install || die_with_message "Error installing gprbuild"
 }
 
 
@@ -298,7 +489,7 @@ echo "▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒�
 echo ""
 
 echo "Checking installed pre-requisites"
-check_install_package "gnat-8" || die_with_message "GNAT installation not found! Exiting"
+check_install_package "gnat-${local_gcc_major_version}" || die_with_message "GNAT installation not found! Exiting"
 check_install_package "zlib1g-dev" || die_with_message "zlib installation not found! Exiting"
 
 if [[ ! -d "${build_dir}" ]]; then
@@ -306,7 +497,7 @@ if [[ ! -d "${build_dir}" ]]; then
 	mkdir -p "${build_dir}" || die_with_message "Error creating build dir! Exiting"
 fi
 
-if [[ -n "${use_local_deps}" ]]; then
+if [[ "1" -eq "${use_local_deps}" ]]; then
 	echo "Linking statically against locally installed GMP, MPC, MPFR."
 
 	check_install_package "libgmp-dev" || die_with_message "GMP installation not found! Exiting"
@@ -320,6 +511,17 @@ else
 	build_mpfr
 fi
 
+if [[ "1" -eq "${use_local_gprbuild}" ]]; then
+	echo "Using the locally installed gprbuild."
+else
+	echo "Installing gprbuild"
+
+	xmlada_source_dir="$(download_xmlada)"
+	gprbuild_source_dir="$(download_gprbuild)"
+	build_bootstrap_gprbuild "${gprbuild_source_dir}" "${xmlada_source_dir}"
+	build_xmlada "${xmlada_source_dir}"
+	build_gprbuild "${gprbuild_source_dir}"
+fi
 
 # build_binutils
 # build_bootstrap_gcc
@@ -327,3 +529,10 @@ fi
 build_gcc
 
 echo "Finished building cross-GNAT"
+echo ""
+echo "Now use the patch in this directory to update gprbuild's knowledge of available "
+echo "compilers. For example:"
+echo "    patch \"<prefix>/share/gprconfig/linker.xml\" \"gprconfig-linker.xml.patch\""
+echo ""
+echo "Then add ${BUILD_PREFIX} to your PATH."
+echo ""
